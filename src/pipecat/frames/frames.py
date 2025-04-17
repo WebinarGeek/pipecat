@@ -239,7 +239,7 @@ class TranscriptionFrame(TextFrame):
     confidence: Optional[int] = None
 
     def __str__(self):
-        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, confidence: {self.confidence}, transcription_id: {self.transcription_id}, timestamp: {self.timestamp})"
+        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, confidence: {self.confidence}, timestamp: {self.timestamp})"
 
 
 @dataclass

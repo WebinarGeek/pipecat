@@ -353,7 +353,13 @@ class GladiaSTTService(STTService):
                     if confidence >= self._confidence:
                         if content["data"]["is_final"]:
                             await self.push_frame(
-                                TranscriptionFrame(transcript, "", time_now_iso8601(), language)
+                                TranscriptionFrame(
+                                    transcript,
+                                    "",
+                                    time_now_iso8601(),
+                                    language,
+                                    confidence,
+                                )
                             )
                         else:
                             await self.push_frame(

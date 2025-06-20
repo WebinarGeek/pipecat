@@ -232,6 +232,14 @@ class GladiaSTTService(STTService):
         self._keepalive_task = None
         self._settings = {}
 
+        # Buffer sent audio chunks until acknowledged by the API
+        self._audio_buffer: list[bytes] = []
+        self._acknowledged_bytes = 0
+
+        self._websocket_url: Optional[str] = None
+        self._reconnect_task = None
+        self._closing = False
+
     def can_generate_metrics(self) -> bool:
         return True
 
@@ -295,9 +303,13 @@ class GladiaSTTService(STTService):
         await super().start(frame)
         if self._websocket:
             return
+
+        self._closing = False
         settings = self._prepare_settings()
         response = await self._setup_gladia(settings)
-        self._websocket = await websockets.connect(response["url"])
+        self._websocket_url = response.get("url")
+        self._websocket = await websockets.connect(self._websocket_url)
+
         if self._websocket and not self._receive_task:
             self._receive_task = self.create_task(self._receive_task_handler())
         if self._websocket and not self._keepalive_task:
@@ -306,6 +318,7 @@ class GladiaSTTService(STTService):
     async def stop(self, frame: EndFrame):
         """Stop the Gladia STT websocket connection."""
         await super().stop(frame)
+        self._closing = True
         await self._send_stop_recording()
 
         if self._keepalive_task:
@@ -320,9 +333,16 @@ class GladiaSTTService(STTService):
             await self.wait_for_task(self._receive_task)
             self._receive_task = None
 
+        if self._reconnect_task:
+            await self.cancel_task(self._reconnect_task)
+            self._reconnect_task = None
+
+        self._audio_buffer.clear()
+
     async def cancel(self, frame: CancelFrame):
         """Cancel the Gladia STT websocket connection."""
         await super().cancel(frame)
+        self._closing = True
 
         if self._keepalive_task:
             await self.cancel_task(self._keepalive_task)
@@ -336,11 +356,24 @@ class GladiaSTTService(STTService):
             await self.cancel_task(self._receive_task)
             self._receive_task = None
 
+        if self._reconnect_task:
+            await self.cancel_task(self._reconnect_task)
+            self._reconnect_task = None
+
+        self._audio_buffer.clear()
+
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
         """Run speech-to-text on audio data."""
         await self.start_ttfb_metrics()
         await self.start_processing_metrics()
-        await self._send_audio(audio)
+
+        if not self._websocket or self._websocket.closed:
+            # Store audio to be resent when connection is re-established
+            self._audio_buffer.append(audio)
+            if not self._reconnect_task:
+                self._reconnect_task = self.create_task(self._reconnect_loop())
+        else:
+            await self._send_audio(audio)
         yield None
 
     async def _setup_gladia(self, settings: Dict[str, Any]):
@@ -368,10 +401,21 @@ class GladiaSTTService(STTService):
         await self.stop_ttfb_metrics()
         await self.stop_processing_metrics()
 
-    async def _send_audio(self, audio: bytes):
-        data = base64.b64encode(audio).decode("utf-8")
-        message = {"type": "audio_chunk", "data": {"chunk": data}}
-        await self._websocket.send(json.dumps(message))
+    async def _send_audio(self, audio: bytes, *, store: bool = True):
+        """Send an audio chunk over the websocket.
+
+        Args:
+            audio: Raw audio bytes to send.
+            store: Whether to store the chunk in the local resend buffer.
+        """
+
+        if store:
+            self._audio_buffer.append(audio)
+
+        if self._websocket and not self._websocket.closed:
+            data = base64.b64encode(audio).decode("utf-8")
+            message = {"type": "audio_chunk", "data": {"chunk": data}}
+            await self._websocket.send(json.dumps(message))
 
     async def _send_stop_recording(self):
         if self._websocket and not self._websocket.closed:
@@ -386,7 +430,7 @@ class GladiaSTTService(STTService):
                 if self._websocket and not self._websocket.closed:
                     # Send an empty audio chunk as keepalive
                     empty_audio = b""
-                    await self._send_audio(empty_audio)
+                    await self._send_audio(empty_audio, store=False)
                 else:
                     logger.debug("Websocket closed, stopping keepalive")
                     break
@@ -443,8 +487,64 @@ class GladiaSTTService(STTService):
                                 translation, "", time_now_iso8601(), translated_language
                             )
                         )
+                elif content.get("type") in {"ack", "audio_added"}:
+                    ack_bytes = (
+                        content.get("data", {}).get("bytes")
+                        or content.get("data", {}).get("duration", 0)
+                    )
+                    if ack_bytes:
+                        self._acknowledge_audio(int(ack_bytes))
         except websockets.exceptions.ConnectionClosed:
             # Expected when closing the connection
-            pass
+            if not self._closing:
+                logger.warning("Gladia WebSocket disconnected unexpectedly")
+                if not self._reconnect_task:
+                    self._reconnect_task = self.create_task(self._reconnect_loop())
         except Exception as e:
             logger.error(f"Error in Gladia WebSocket handler: {e}")
+
+    def _acknowledge_audio(self, num_bytes: int):
+        """Remove acknowledged audio from the resend buffer."""
+        remaining = num_bytes
+        while remaining > 0 and self._audio_buffer:
+            chunk = self._audio_buffer[0]
+            if remaining >= len(chunk):
+                remaining -= len(chunk)
+                self._audio_buffer.pop(0)
+            else:
+                self._audio_buffer[0] = chunk[remaining:]
+                remaining = 0
+
+    async def _reconnect_loop(self):
+        attempt = 0
+        max_attempts_before_new_url = 3
+        while not self._closing:
+            attempt += 1
+            try:
+                await asyncio.sleep(min(5, attempt))
+
+                if not self._websocket_url:
+                    return
+
+                if attempt > max_attempts_before_new_url:
+                    # Request a fresh websocket URL after several failures
+                    response = await self._setup_gladia(self._settings)
+                    self._websocket_url = response.get("url")
+                    attempt = 1
+
+                self._websocket = await websockets.connect(self._websocket_url)
+                self._receive_task = self.create_task(self._receive_task_handler())
+                if not self._keepalive_task:
+                    self._keepalive_task = self.create_task(self._keepalive_task_handler())
+
+                # Resend buffered audio
+                for chunk in list(self._audio_buffer):
+                    await self._send_audio(chunk, store=False)
+
+                logger.info("Gladia WebSocket reconnected")
+                self._reconnect_task = None
+                return
+            except Exception as e:
+                logger.error(f"Reconnect attempt {attempt} failed: {e}")
+
+        self._reconnect_task = None

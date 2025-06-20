@@ -166,6 +166,9 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 - Added new functions `DailyTransport.start_transcription()` and
   `DailyTransport.stop_transcription()` to be able to start and stop Daily
   transcription dynamically (maybe with different settings).
+- `GladiaSTTService` now buffers audio and automatically reconnects to resume
+  a session if the websocket disconnects unexpectedly. After multiple failed
+  reconnect attempts it will request a fresh websocket URL before continuing.
 
 ### Changed
 

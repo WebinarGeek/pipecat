@@ -26,7 +26,6 @@ from pipecat.services.gladia.config import GladiaInputParams
 from pipecat.services.stt_service import STTService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
-from pipecat.utils.tracing.service_decorators import traced_stt
 
 try:
     import websockets
@@ -456,7 +455,6 @@ class GladiaSTTService(STTService):
                         f"Failed to initialize Gladia session: {response.status} - {error_text}"
                     )
 
-    @traced_stt
     async def _handle_transcription(
         self, transcript: str, is_final: bool, language: Optional[str] = None
     ):

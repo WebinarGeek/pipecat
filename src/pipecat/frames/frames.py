@@ -237,9 +237,10 @@ class TranscriptionFrame(TextFrame):
     timestamp: str
     language: Optional[Language] = None
     result: Optional[Any] = None
+    confidence: Optional[int] = None
 
     def __str__(self):
-        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, timestamp: {self.timestamp})"
+        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, confidence: {self.confidence}, timestamp: {self.timestamp})"
 
 
 @dataclass
@@ -254,9 +255,10 @@ class InterimTranscriptionFrame(TextFrame):
     timestamp: str
     language: Optional[Language] = None
     result: Optional[Any] = None
+    confidence: Optional[int] = None
 
     def __str__(self):
-        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, timestamp: {self.timestamp})"
+        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, confidence: {self.confidence}, timestamp: {self.timestamp})"
 
 
 @dataclass
@@ -270,9 +272,10 @@ class TranslationFrame(TextFrame):
     user_id: str
     timestamp: str
     language: Optional[Language] = None
+    confidence: Optional[int] = None
 
     def __str__(self):
-        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, timestamp: {self.timestamp})"
+        return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, confidence: {self.confidence}, timestamp: {self.timestamp})"
 
 
 @dataclass

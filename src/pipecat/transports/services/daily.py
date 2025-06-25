@@ -188,6 +188,7 @@ class DailyCallbacks(BaseModel):
         on_recording_started: Called when recording starts.
         on_recording_stopped: Called when recording stops.
         on_recording_error: Called when recording encounters an error.
+        on_active_speaker_changed: Called when the active speaker of the call has changed.
     """
 
     on_joined: Callable[[Mapping[str, Any]], Awaitable[None]]
@@ -214,6 +215,7 @@ class DailyCallbacks(BaseModel):
     on_recording_started: Callable[[Mapping[str, Any]], Awaitable[None]]
     on_recording_stopped: Callable[[str], Awaitable[None]]
     on_recording_error: Callable[[str, str], Awaitable[None]]
+    on_active_speaker_changed: Callable[[Mapping[str, Any]], Awaitable[None]]
 
 
 def completion_callback(future):
@@ -769,6 +771,9 @@ class DailyTransportClient(EventHandler):
         logger.error(f"Recording error for {stream_id}: {message}")
         self._call_async_callback(self._callbacks.on_recording_error, stream_id, message)
 
+    def on_active_speaker_changed(self, participant):
+        self._call_async_callback(self._callbacks.on_active_speaker_changed, participant)
+
     #
     # Daily (CallClient callbacks)
     #
@@ -1090,6 +1095,7 @@ class DailyTransport(BaseTransport):
             on_recording_started=self._on_recording_started,
             on_recording_stopped=self._on_recording_stopped,
             on_recording_error=self._on_recording_error,
+            on_active_speaker_changed=self._on_active_speaker_changed,
         )
         self._params = params
 
@@ -1126,6 +1132,7 @@ class DailyTransport(BaseTransport):
         self._register_event_handler("on_recording_started")
         self._register_event_handler("on_recording_stopped")
         self._register_event_handler("on_recording_error")
+        self._register_event_handler("on_active_speaker_changed")
 
     #
     # BaseTransport
@@ -1379,3 +1386,6 @@ class DailyTransport(BaseTransport):
 
     async def _on_recording_error(self, stream_id, message):
         await self._call_event_handler("on_recording_error", stream_id, message)
+
+    async def _on_active_speaker_changed(self, participant: Any):
+        await self._call_event_handler("on_active_speaker_changed", participant)

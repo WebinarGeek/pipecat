@@ -383,12 +383,28 @@ class DailyTransportClient(EventHandler):
             audio_source = track.source
 
         if audio_source:
+            # Push the audio frames to the selected audio source. We still
+            # provide a completion callback so the underlying Daily SDK can
+            # notify us when the write has effectively been consumed, but we
+            # intentionally DO NOT await on the resulting future. Awaiting
+            # here would serialise writes coming from different media senders
+            # (e.g. when more than one custom audio track is in use) and would
+            # therefore introduce unnecessary latency that results in choppy
+            # audio on all tracks. By returning immediately we allow every
+            # sender to push frames concurrently while the Daily SDK
+            # processes them in the background.
+
+            # Attach a no-op done callback so that any unexpected exception is
+            # consumed and doesn't raise "Future exception was never
+            # retrieved" warnings.
+            future.add_done_callback(lambda f: f.exception())
+
             audio_source.write_frames(frame.audio, completion=completion_callback(future))
         else:
             logger.warning(f"{self} unable to write audio frames to destination [{destination}]")
             future.set_result(None)
 
-        await future
+        # We purposefully do not await `future` here – see the comment above.
 
     async def write_video_frame(self, frame: OutputImageRawFrame):
         if not frame.transport_destination and self._camera:
@@ -1225,7 +1241,7 @@ class DailyOutputTransport(BaseOutputTransport):
         logger.warning(f"{self} registering video destinations is not supported yet")
 
     async def register_audio_destination(self, destination: str):
-        await self._client.register_audio_destination(destination)
+        self._client.register_audio_destination(destination)
 
     async def write_dtmf(self, frame: OutputDTMFFrame | OutputDTMFUrgentFrame):
         await self._client.send_dtmf(

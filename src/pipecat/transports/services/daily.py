@@ -369,7 +369,7 @@ class DailyTransportClient(EventHandler):
 
     async def register_audio_destination(self, destination: str):
         self._custom_audio_tracks[destination] = await self.add_custom_audio_track(destination)
-        self._client.update_publishing({"customAudio": {destination: True}})
+        await self.update_publishing({"customAudio": {destination: True}})
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame):
         future = self._get_event_loop().create_future()

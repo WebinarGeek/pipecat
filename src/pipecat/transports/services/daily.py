@@ -372,8 +372,6 @@ class DailyTransportClient(EventHandler):
         self._client.update_publishing({"customAudio": {destination: True}})
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame):
-        future = self._get_event_loop().create_future()
-
         destination = frame.transport_destination
         audio_source: Optional[CustomAudioSource] = None
         if not destination and self._microphone_track:
@@ -382,13 +380,38 @@ class DailyTransportClient(EventHandler):
             track = self._custom_audio_tracks[destination]
             audio_source = track.source
 
+        # Writing audio frames should not block the event-loop – especially when
+        # multiple output destinations are active. Otherwise, frames written to
+        # one track need to complete before the next track can be processed,
+        # leading to audible stuttering once a second track is added. We still
+        # forward a completion callback so that the Daily SDK can notify when
+        # it has consumed the buffer, but we intentionally do **not** wait for
+        # it here. This lets writes to different tracks run concurrently
+        # without getting in each other’s way.
+
         if audio_source:
+            # Create a Future only so that the completion callback has a place
+            # to signal the result. We don’t await on it – instead we add a
+            # done-callback that discards the outcome, preventing "unreached
+            # future" warnings while keeping the operation fully async.
+            future = self._get_event_loop().create_future()
+
+            # Ensure any exception set on the Future does not get lost.
+            def _silent_future_done(fut: asyncio.Future):
+                try:
+                    fut.result()
+                except Exception as exc:
+                    logger.debug(f"{self} audio write callback raised: {exc}")
+
+            future.add_done_callback(_silent_future_done)
+
             audio_source.write_frames(frame.audio, completion=completion_callback(future))
         else:
             logger.warning(f"{self} unable to write audio frames to destination [{destination}]")
-            future.set_result(None)
 
-        await future
+        # Yield control back to the event loop to keep the coroutine truly
+        # asynchronous without blocking.
+        await asyncio.sleep(0)
 
     async def write_video_frame(self, frame: OutputImageRawFrame):
         if not frame.transport_destination and self._camera:
